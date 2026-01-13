@@ -45,88 +45,61 @@ type WhisperAPIConfig struct {
 
 // NewWhisperAPITranscription creates a new external Whisper API transcription service
 func NewWhisperAPITranscription(config *WhisperAPIConfig) *WhisperAPITranscription {
-	// Configure custom transport with proper connection pooling and timeouts
-	transport := &http.Transport{
-		// Connection pool settings
-		MaxIdleConns:        100,              // Maximum total idle connections
-		MaxIdleConnsPerHost: 10,               // Maximum idle connections per host
-		MaxConnsPerHost:     20,               // Maximum total connections per host
-		IdleConnTimeout:     90 * time.Second, // How long idle connections stay open
-		
-		// Timeouts for establishing connections
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second, // Connection timeout
-			KeepAlive: 30 * time.Second, // Keep-alive probe interval
-		}).DialContext,
-		
-		// Other important timeouts
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second, // Timeout waiting for response headers
-		ExpectContinueTimeout: 1 * time.Second,
-		
-		// Disable HTTP/2 to avoid potential issues with some Whisper servers
-		ForceAttemptHTTP2: false,
-		
-		// Don't reuse connections that have been idle too long
-		DisableKeepAlives: false, // Keep connections alive for reuse
-	}
-	
-	api := &WhisperAPITranscription{
-		baseURL: config.BaseURL,
-		apiKey:  config.APIKey,
-		httpClient: &http.Client{
-			Timeout:   5 * time.Minute, // Allow up to 5 minutes for transcription
-			Transport: transport,
-		},
-	}
+    transport := &http.Transport{
+        MaxIdleConns:        100,
+        MaxIdleConnsPerHost: 10,
+        MaxConnsPerHost:     20,
+        IdleConnTimeout:     90 * time.Second,
 
-	// Default to localhost:8000 if not specified
-	if api.baseURL == "" {
-		api.baseURL = "http://localhost:8000"
-	}
+        DialContext: (&net.Dialer{
+            Timeout:   30 * time.Second,
+            KeepAlive: 30 * time.Second,
+        }).DialContext,
 
-	// Remove trailing slash
-	api.baseURL = strings.TrimSuffix(api.baseURL, "/")
+        TLSHandshakeTimeout:   10 * time.Second,
+        ResponseHeaderTimeout: 30 * time.Second,
+        ExpectContinueTimeout: 1 * time.Second,
 
-	// Test availability by checking health endpoint
-	api.available = api.checkAvailability()
+        ForceAttemptHTTP2: false,
+        DisableKeepAlives: false,
+    }
 
-	return api
-}
+    api := &WhisperAPITranscription{
+        baseURL: config.BaseURL,
+        apiKey:  strings.TrimSpace(config.APIKey),
+        httpClient: &http.Client{
+            Timeout:   5 * time.Minute,
+            Transport: transport,
+        },
+        available: true, // <-- IMPORTANT: default “configured”
+    }
 
-// checkAvailability checks if the API server is available
-// Uses a short timeout (5 seconds) to avoid blocking server startup
-func (api *WhisperAPITranscription) checkAvailability() bool {
-	healthURL := api.baseURL + "/health"
-	
-	// Use a short timeout for health checks to avoid blocking server startup
-	// if the API server is busy processing a transcription
-	healthClient := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-	
-	resp, err := healthClient.Get(healthURL)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+    if api.baseURL == "" {
+        api.baseURL = "https://api.openai.com"
+    }
+    api.baseURL = strings.TrimSuffix(api.baseURL, "/")
+
+    // OpenAI official endpoints require an API key
+    if strings.HasPrefix(api.baseURL, "https://api.openai.com") && api.apiKey == "" {
+        api.available = false
+    }
+
+    return api
 }
 
 // Transcribe transcribes audio using the external Whisper API server
 func (api *WhisperAPITranscription) Transcribe(audio []byte, options TranscriptionOptions) (*TranscriptionResult, error) {
 	if !api.available {
-		if !api.warned {
-			api.warned = true
-			return nil, fmt.Errorf("whisper API server not available at %s. Make sure the server is running", api.baseURL)
-		}
-		return nil, errors.New("whisper API is not available")
-	}
+            if strings.HasPrefix(api.baseURL, "https://api.openai.com") && strings.TrimSpace(api.apiKey) == "" {
+                return nil, errors.New("OpenAI API key is missing (config.APIKey). Cannot call https://api.openai.com/v1/audio/transcriptions")
+            }
+            return nil, fmt.Errorf("whisper API is not available/configured for %s", api.baseURL)
+        }
 
 	// Retry logic with exponential backoff for transient network errors
 	maxRetries := 3
 	baseDelay := 1 * time.Second
-	
+
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -134,24 +107,24 @@ func (api *WhisperAPITranscription) Transcribe(audio []byte, options Transcripti
 			delay := baseDelay * time.Duration(1<<uint(attempt-1))
 			time.Sleep(delay)
 		}
-		
+
 		result, err := api.attemptTranscribe(audio, options)
 		if err == nil {
 			return result, nil
 		}
-		
+
 		lastErr = err
-		
+
 		// Check if error is retryable (network/connection errors)
 		if isRetryableError(err) && attempt < maxRetries {
 			// Retry on connection errors, EOF, etc.
 			continue
 		}
-		
+
 		// Non-retryable error or max retries exceeded
 		break
 	}
-	
+
 	return nil, lastErr
 }
 
@@ -160,9 +133,9 @@ func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	errMsg := err.Error()
-	
+
 	// Check for common retryable errors
 	retryableErrors := []string{
 		"connection refused",
@@ -175,13 +148,13 @@ func isRetryableError(err error) bool {
 		"temporary failure",
 		"TLS handshake timeout",
 	}
-	
+
 	for _, retryable := range retryableErrors {
 		if strings.Contains(strings.ToLower(errMsg), strings.ToLower(retryable)) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -225,15 +198,12 @@ func (api *WhisperAPITranscription) attemptTranscribe(audio []byte, options Tran
 	}
 
 	// Add language if specified
-	language := options.Language
-	if language == "" || language == "auto" {
-		language = "en"
-	}
-	if language != "" {
-		if err := writer.WriteField("language", language); err != nil {
-			return nil, fmt.Errorf("failed to write language field: %v", err)
-		}
-	}
+	language := strings.TrimSpace(options.Language)
+    if language != "" && strings.ToLower(language) != "auto" {
+        if err := writer.WriteField("language", strings.ToLower(language)); err != nil {
+            return nil, fmt.Errorf("failed to write language field: %v", err)
+        }
+    }
 
 	// Add response format (use verbose_json to get segments)
 	if err := writer.WriteField("response_format", "verbose_json"); err != nil {
@@ -273,7 +243,7 @@ func (api *WhisperAPITranscription) attemptTranscribe(audio []byte, options Tran
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	// Add Connection: close header to avoid connection reuse issues
 	req.Header.Set("Connection", "keep-alive")
-	
+
 	if api.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+api.apiKey)
 	}
@@ -286,9 +256,15 @@ func (api *WhisperAPITranscription) attemptTranscribe(audio []byte, options Tran
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
+        bodyBytes, _ := io.ReadAll(resp.Body)
+
+        // If key is wrong/forbidden, stop trying until restart/reconfig
+        if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+            api.available = false
+        }
+
+        return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+    }
 
 	// Parse response
 	var apiResponse struct {
@@ -314,7 +290,7 @@ func (api *WhisperAPITranscription) attemptTranscribe(audio []byte, options Tran
 
 	// Convert to TranscriptionResult format
 	transcript := strings.ToUpper(strings.TrimSpace(apiResponse.Text))
-	
+
 	// Build segments
 	segments := make([]TranscriptSegment, 0, len(apiResponse.Segments))
 	for _, seg := range apiResponse.Segments {
