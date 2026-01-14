@@ -280,17 +280,17 @@
     <div class="row" *ngIf="form?.get('transcriptionEnabled')?.value && form?.get('transcriptionConfig')?.get('provider')?.value === 'whisper-api'" formGroupName="transcriptionConfig">
         <p>
             <span class="mat-body">Whisper API Server URL</span><br>
-            <span class="mat-caption">Base URL of the external Whisper API server (e.g., "http://localhost:8000"). The server should be OpenAI-compatible and provide /v1/audio/transcriptions endpoint.</span>
+            <span class="mat-caption">Base URL of the Whisper API server (e.g., "http://localhost:8000") or official https://api.openai.com. The server should be OpenAI-compatible and provide /v1/audio/transcriptions endpoint or the official OpenAI API.</span>
         </p>
         <mat-form-field floatLabel="auto">
-            <input type="text" matInput formControlName="whisperAPIURL" placeholder="http://localhost:8000">
+            <input type="text" matInput formControlName="whisperAPIURL" placeholder="https://api.openai.com">
         </mat-form-field>
     </div>
 
     <div class="row" *ngIf="form?.get('transcriptionEnabled')?.value && form?.get('transcriptionConfig')?.get('provider')?.value === 'whisper-api'" formGroupName="transcriptionConfig">
         <p>
-            <span class="mat-body">Whisper API Key (Optional)</span><br>
-            <span class="mat-caption">Optional API key if your Whisper API server requires authentication.</span>
+            <span class="mat-body">Whisper API Key</span><br>
+            <span class="mat-caption">API key if your Whisper API server requires authentication. Optional unless using Official API</span>
         </p>
         <mat-form-field floatLabel="auto">
             <input type="text" matInput formControlName="whisperAPIKey" placeholder="(optional)">
@@ -396,8 +396,8 @@
             <span class="mat-caption">Phrases that should be removed from transcripts (case-insensitive). Whisper may hallucinate common phrases from tone-only audio. Add one pattern per line. Example: "THE BELL IS INVITED TO SOUND THREE TIMES"</span>
         </p>
         <mat-form-field floatLabel="auto" style="width: 100%;">
-            <textarea 
-                matInput 
+            <textarea
+                matInput
                 formControlName="hallucinationPatterns"
                 placeholder="Enter patterns to remove, one per line"
                 rows="4"
